@@ -1,6 +1,13 @@
 const db = require('../db');
 
-const VALID_GAMES = new Set(['cache', 'spell']);
+const isValidGameId = db.prepare(
+  'SELECT 1 AS ok FROM games WHERE id = ? AND status = ? LIMIT 1'
+);
+
+function isPlayableGame(gameId) {
+  if (typeof gameId !== 'string' || !gameId) return false;
+  return !!isValidGameId.get(gameId, 'playable');
+}
 
 const insertSession = db.prepare(
   `INSERT INTO play_sessions (user_id, game_id, score, accuracy, xp_earned)
@@ -38,6 +45,9 @@ const getRecentQuery = db.prepare(
    ORDER BY s.created_at DESC, s.id DESC
    LIMIT ?`
 );
+const getPlayableGamesQuery = db.prepare(
+  `SELECT id FROM games WHERE status = 'playable' ORDER BY sort_order, id`
+);
 
 function emptyGameStats() {
   return { bestScore: 0, plays: 0, accuracy: 0 };
@@ -46,8 +56,8 @@ function emptyGameStats() {
 function record(req, res) {
   const { gameId, score, accuracy, xpEarned } = req.body || {};
 
-  if (!VALID_GAMES.has(gameId)) {
-    return res.status(400).json({ error: "gameId must be 'cache' or 'spell'" });
+  if (!isPlayableGame(gameId)) {
+    return res.status(400).json({ error: 'gameId is not a playable game' });
   }
   if (!Number.isFinite(score) || score < 0 || score > 100000) {
     return res.status(400).json({ error: 'score must be 0–100000' });
@@ -75,7 +85,10 @@ function summary(req, res) {
   const { count: totalUsers } = getUserCount.get();
   const { rank } = getRankQuery.get(total_xp, total_xp, req.user.id);
 
-  const perGame = { cache: emptyGameStats(), spell: emptyGameStats() };
+  const perGame = {};
+  for (const g of getPlayableGamesQuery.all()) {
+    perGame[g.id] = emptyGameStats();
+  }
   for (const r of rows) {
     perGame[r.game_id] = {
       bestScore: r.best_score,
